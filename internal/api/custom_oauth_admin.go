@@ -53,9 +53,11 @@ type AdminCustomOAuthProviderParams struct {
 	Scopes              []string               `json:"scopes"`
 	PKCEEnabled         *bool                  `json:"pkce_enabled,omitempty"`
 	AttributeMapping    map[string]interface{} `json:"attribute_mapping,omitempty"`
-	AuthorizationParams map[string]interface{} `json:"authorization_params,omitempty"`
-	Enabled             *bool                  `json:"enabled,omitempty"`
-	EmailOptional       *bool                  `json:"email_optional,omitempty"`
+	// CustomClaimsAllowlist lists raw IdP claim keys to copy verbatim into custom_claims.
+	CustomClaimsAllowlist []string               `json:"custom_claims_allowlist,omitempty"`
+	AuthorizationParams   map[string]interface{} `json:"authorization_params,omitempty"`
+	Enabled               *bool                  `json:"enabled,omitempty"`
+	EmailOptional         *bool                  `json:"email_optional,omitempty"`
 
 	// OIDC-specific fields
 	Issuer         string  `json:"issuer,omitempty"`
@@ -170,6 +172,11 @@ func (a *API) adminCustomOAuthProviderCreate(w http.ResponseWriter, r *http.Requ
 		return err
 	}
 
+	// Validate custom claims allowlist (non-empty source keys)
+	if err := validateCustomClaimsAllowlist(params.CustomClaimsAllowlist); err != nil {
+		return err
+	}
+
 	// Check quota if configured
 	if config.CustomOAuth.MaxProviders > 0 {
 		totalCount, err := models.CountCustomOAuthProviders(db)
@@ -274,6 +281,13 @@ func (a *API) adminCustomOAuthProviderUpdate(w http.ResponseWriter, r *http.Requ
 	// Validate attribute mapping if provided
 	if params.AttributeMapping != nil {
 		if err := validateAttributeMapping(params.AttributeMapping); err != nil {
+			return err
+		}
+	}
+
+	// Validate custom claims allowlist if provided
+	if params.CustomClaimsAllowlist != nil {
+		if err := validateCustomClaimsAllowlist(params.CustomClaimsAllowlist); err != nil {
 			return err
 		}
 	}
@@ -422,11 +436,12 @@ func validateProviderParams(params *AdminCustomOAuthProviderParams, providerType
 	}
 
 	// Type-specific validations
-	if providerType == models.ProviderTypeOIDC {
+	switch providerType {
+	case models.ProviderTypeOIDC:
 		if params.Issuer == "" {
 			return apierrors.NewBadRequestError(apierrors.ErrorCodeValidationFailed, "issuer is required for OIDC providers")
 		}
-	} else if providerType == models.ProviderTypeOAuth2 {
+	case models.ProviderTypeOAuth2:
 		if params.AuthorizationURL == "" {
 			return apierrors.NewBadRequestError(apierrors.ErrorCodeValidationFailed, "authorization_url is required for OAuth2 providers")
 		}
@@ -445,12 +460,13 @@ func validateProviderParams(params *AdminCustomOAuthProviderParams, providerType
 func validateProviderURLs(params *AdminCustomOAuthProviderParams, providerType models.ProviderType) error {
 	var urls []string
 
-	if providerType == models.ProviderTypeOIDC {
+	switch providerType {
+	case models.ProviderTypeOIDC:
 		urls = append(urls, params.Issuer)
 		if params.DiscoveryURL != nil && *params.DiscoveryURL != "" {
 			urls = append(urls, *params.DiscoveryURL)
 		}
-	} else if providerType == models.ProviderTypeOAuth2 {
+	case models.ProviderTypeOAuth2:
 		urls = []string{
 			params.AuthorizationURL,
 			params.TokenURL,
@@ -477,18 +493,19 @@ func buildProviderFromParams(params *AdminCustomOAuthProviderParams, providerTyp
 	// Generate ID upfront so it's available for client secret encryption (used as AAD)
 	id, _ := uuid.NewV4()
 	provider := &models.CustomOAuthProvider{
-		ID:                  id,
-		ProviderType:        providerType,
-		Identifier:          params.Identifier,
-		Name:                params.Name,
-		ClientID:            params.ClientID,
-		AcceptableClientIDs: popslices.String(params.AcceptableClientIDs),
-		Scopes:              popslices.String(params.Scopes),
-		PKCEEnabled:         getBoolOrDefault(params.PKCEEnabled, true),
-		AttributeMapping:    popslices.Map(params.AttributeMapping),
-		AuthorizationParams: popslices.Map(params.AuthorizationParams),
-		Enabled:             getBoolOrDefault(params.Enabled, true),
-		EmailOptional:       getBoolOrDefault(params.EmailOptional, false),
+		ID:                    id,
+		ProviderType:          providerType,
+		Identifier:            params.Identifier,
+		Name:                  params.Name,
+		ClientID:              params.ClientID,
+		AcceptableClientIDs:   popslices.String(params.AcceptableClientIDs),
+		Scopes:                popslices.String(params.Scopes),
+		PKCEEnabled:           getBoolOrDefault(params.PKCEEnabled, true),
+		AttributeMapping:      popslices.Map(params.AttributeMapping),
+		CustomClaimsAllowlist: popslices.String(params.CustomClaimsAllowlist),
+		AuthorizationParams:   popslices.Map(params.AuthorizationParams),
+		Enabled:               getBoolOrDefault(params.Enabled, true),
+		EmailOptional:         getBoolOrDefault(params.EmailOptional, false),
 	}
 
 	// Set type-specific fields
@@ -560,6 +577,9 @@ func updateProviderFromParams(provider *models.CustomOAuthProvider, params *Admi
 	if params.AttributeMapping != nil {
 		provider.AttributeMapping = popslices.Map(params.AttributeMapping)
 	}
+	if params.CustomClaimsAllowlist != nil {
+		provider.CustomClaimsAllowlist = popslices.String(params.CustomClaimsAllowlist)
+	}
 	if params.AuthorizationParams != nil {
 		provider.AuthorizationParams = popslices.Map(params.AuthorizationParams)
 	}
@@ -625,28 +645,32 @@ func getBoolOrDefault(value *bool, defaultValue bool) bool {
 	return *value
 }
 
+// reservedOAuthParams lists OAuth2/OIDC parameters that the auth server
+// controls. They must never be overridden by client-supplied input, since
+// allowing override would be a security issue (e.g. swapping redirect_uri or
+// state). nonce is reserved here so it can't be pinned to a static value in a
+// provider's stored authorization_params; it is still allowed as a per-request
+// passthrough on the external redirect (see external.go).
+var reservedOAuthParams = []string{
+	"client_id",
+	"client_secret",
+	"redirect_uri",
+	"response_type",
+	"state",
+	"code_challenge",
+	"code_challenge_method",
+	"code_verifier",
+	"nonce",
+}
+
 // validateAuthorizationParams ensures no reserved OAuth parameters are overridden
 func validateAuthorizationParams(params map[string]interface{}) error {
 	if params == nil {
 		return nil
 	}
 
-	// Reserved OAuth2/OIDC parameters that should never be overridden
-	// These are set by the auth server and allowing override would be a security issue
-	reservedParams := []string{
-		"client_id",
-		"client_secret",
-		"redirect_uri",
-		"response_type",
-		"state",
-		"code_challenge",
-		"code_challenge_method",
-		"code_verifier",
-		"nonce", // We control nonce generation for security
-	}
-
 	for key, value := range params {
-		if slices.Contains(reservedParams, key) {
+		if slices.Contains(reservedOAuthParams, key) {
 			return apierrors.NewBadRequestError(
 				apierrors.ErrorCodeValidationFailed,
 				"Cannot override reserved OAuth parameter: %s", key,
@@ -749,3 +773,18 @@ func validateAttributeMapping(mapping map[string]interface{}) error {
 	return nil
 }
 
+// validateCustomClaimsAllowlist ensures every allowlist entry is a non-empty
+// source claim key. Unlike attribute_mapping, these are opaque source keys
+// copied into custom_claims (not typed targets)
+func validateCustomClaimsAllowlist(allowlist []string) error {
+	for _, key := range allowlist {
+		if strings.TrimSpace(key) == "" {
+			return apierrors.NewBadRequestError(
+				apierrors.ErrorCodeValidationFailed,
+				"custom_claims_allowlist entries must be non-empty strings",
+			)
+		}
+	}
+
+	return nil
+}

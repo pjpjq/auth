@@ -1489,15 +1489,17 @@ paths:
                             - user_updated_password
                             - token_revoked
                             - token_refreshed
-                            - generate_recovery_codes
                             - factor_in_progress
                             - factor_unenrolled
                             - challenge_created
                             - verification_attempted
                             - factor_deleted
-                            - recovery_codes_deleted
                             - factor_updated
-                            - mfa_code_login
+                            - identity_linked
+                            - identity_unlinked
+                            - passkey_created
+                            - passkey_updated
+                            - passkey_deleted
                         log_type:
                           type: string
                           description: |-
@@ -1507,7 +1509,6 @@ paths:
                             - token
                             - user
                             - factor
-                            - recovery_codes
                     created_at:
                       type: string
                       format: date-time
@@ -2339,6 +2340,12 @@ paths:
                   example:
                     email: "user_email"
                     name: "full_name"
+                custom_claims_allowlist:
+                  type: array
+                  items:
+                    type: string
+                  description: Raw IdP claim keys to copy verbatim into the user's custom_claims (e.g. groups, org_id). For OIDC providers these are read from the ID token claims (falling back to the userinfo response when no ID token is returned); for OAuth2 providers they are read from the userinfo response. Empty preserves no non-standard claims.
+                  example: ["groups", "org_id"]
                 authorization_params:
                   type: object
                   description: Additional authorization request parameters as string key-value pairs (cannot override reserved OAuth parameters)
@@ -2565,6 +2572,11 @@ paths:
                   type: object
                   description: Map provider claims to user attributes
                   additionalProperties: true
+                custom_claims_allowlist:
+                  type: array
+                  items:
+                    type: string
+                  description: Raw IdP claim keys to copy verbatim into the user's custom_claims (e.g. groups, org_id). For OIDC providers these are read from the ID token claims (falling back to the userinfo response when no ID token is returned); for OAuth2 providers they are read from the userinfo response. Empty preserves no non-standard claims.
                 authorization_params:
                   type: object
                   description: Additional authorization request parameters as string key-value pairs
@@ -3777,6 +3789,12 @@ components:
           example:
             email: "user_email"
             name: "full_name"
+        custom_claims_allowlist:
+          type: array
+          items:
+            type: string
+          description: Raw IdP claim keys copied verbatim into the user's custom_claims (e.g. groups, org_id). For OIDC providers these are read from the ID token claims (falling back to the userinfo response when no ID token is returned); for OAuth2 providers they are read from the userinfo response. Empty preserves no non-standard claims.
+          example: ["groups", "org_id"]
         authorization_params:
           type: object
           description: Additional parameters to include in authorization requests as string key-value pairs (cannot override reserved OAuth parameters)

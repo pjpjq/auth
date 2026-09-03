@@ -208,6 +208,11 @@ func (a *API) requireAdminCredentials(w http.ResponseWriter, req *http.Request) 
 
 		session := getSession(ctx)
 		user := getUser(ctx)
+
+		if user != nil && user.IsBanned() {
+			return nil, apierrors.NewForbiddenError(apierrors.ErrorCodeUserBanned, "User is banned")
+		}
+
 		if session != nil && user != nil {
 			validity := session.CheckValidity(models.SessionValidityConfig{
 				Timebox:           a.config.Sessions.Timebox,
@@ -416,6 +421,14 @@ func (a *API) requirePasskeyEnabled(w http.ResponseWriter, req *http.Request) (c
 	ctx := req.Context()
 	if !a.config.Passkey.Enabled {
 		return nil, apierrors.NewNotFoundError(apierrors.ErrorCodePasskeyDisabled, "Passkeys are disabled")
+	}
+	return ctx, nil
+}
+
+func (a *API) requireScimServerEnabled(w http.ResponseWriter, req *http.Request) (context.Context, error) {
+	ctx := req.Context()
+	if !a.config.Experimental.ScimEnabled {
+		return nil, apierrors.NewNotFoundError(apierrors.ErrorCodeFeatureDisabled, "SCIM server is disabled")
 	}
 	return ctx, nil
 }

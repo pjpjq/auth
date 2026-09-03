@@ -1,5 +1,5 @@
-.PHONY: all build deps image migrate test vet sec vulncheck format unused release
-.PHONY: check-gosec check-govulncheck check-oapi-codegen check-staticcheck
+.PHONY: all build deps image migrate test vet sec vulncheck format hooks lint unused release
+.PHONY: check-gosec check-govulncheck check-oapi-codegen check-staticcheck check-go-version check-format
 CHECK_FILES ?= ./...
 
 ifdef RELEASE_VERSION
@@ -41,7 +41,7 @@ TOOL_TARGETS = \
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-all: vet sec static build ## Run the tests and build the binary.
+all: check-go-version vet sec static build ## Run the tests and build the binary.
 
 build: auth auth-amd64 auth-arm64 auth-darwin-arm64 ## Build the binaries.
 
@@ -60,7 +60,7 @@ auth-arm64: deps
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(call BUILD_CMD,$(@),)
 
 auth-darwin-arm64: deps
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(call BUILD_CMD,$(@),)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(call BUILD_CMD,$(@),)
 
 auth-amd64-strip: deps
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(call BUILD_CMD,$(@), -s)
@@ -72,12 +72,14 @@ deps: ## Install dependencies.
 	@go mod download
 	@go mod verify
 
-release-test: \
+lint: \
+	check-go-version \
 	vet \
 	static \
 	sec \
-	vulncheck \
-	test
+	vulncheck
+
+release-test: lint test
 
 release: $(RELEASE_ARCHIVES)
 
@@ -117,6 +119,9 @@ test: auth ## Run tests.
 
 vet: # Vet the code
 	go vet $(CHECK_FILES)
+
+check-go-version: ## Verify the pinned Go version matches across go.mod, Dockerfiles, and submodules.
+	./hack/check-go-version.sh
 
 .NOTPARALLEL: $(TOOL_TARGETS)
 $(TOOL_TARGETS):
@@ -179,6 +184,19 @@ docker-clean: ## Remove the development containers and volumes
 
 format:
 	gofmt -s -w .
+
+check-format: ## Verify gofmt formatting. Pass FILES="..." to scope the check.
+	@files=$$(gofmt -s -l $(or $(FILES),.)); \
+	if [ -n "$$files" ]; then \
+		echo "The following files are not gofmt-formatted:"; \
+		echo "$$files"; \
+		echo 'Run "make format" and re-stage the changes.'; \
+		exit 1; \
+	fi
+
+hooks: ## Install the git hooks defined in lefthook.yml (requires: brew install lefthook).
+	lefthook install
+	$(MAKE) -C tools
 
 clean:
 	$(MAKE) -C tools clean

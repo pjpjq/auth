@@ -28,6 +28,12 @@ import (
 
 const retryLoopDuration = 5.0
 
+// OAuth2 server grant type values
+const (
+	GrantTypeAuthorizationCode = "authorization_code"
+	GrantTypeRefreshToken      = "refresh_token"
+)
+
 // AMRClaim supports unmarshalling AMR as either strings or AMREntry objects.
 type AMRClaim []models.AMREntry
 
@@ -647,6 +653,14 @@ func (s *Service) RefreshTokenGrant(ctx context.Context, db *storage.Connection,
 			}
 		}
 		metering.RecordLogin(metering.LoginTypeToken, user.ID, nil)
+		if sessionClientID != nil {
+			metering.RecordLogin(metering.LoginTypeOAuthServer, user.ID, &metering.LoginData{
+				OAuthServer: &metering.OAuthServerData{
+					ClientID:  sessionClientID.String(),
+					GrantType: GrantTypeRefreshToken,
+				},
+			})
+		}
 		return newTokenResponse, nil
 	}
 
@@ -886,6 +900,10 @@ func (s *Service) IssueRefreshToken(r *http.Request, responseHeaders http.Header
 
 			if terr := tx.Create(session); terr != nil {
 				return apierrors.NewInternalServerError("Database error creating new session").WithInternalError(terr)
+			}
+
+			if terr := user.UpdateLastSignInAt(tx); terr != nil {
+				return apierrors.NewInternalServerError("Database error updating user's last_sign_in_at").WithInternalError(terr)
 			}
 
 			signingKey, _, terr := session.GetRefreshTokenHmacKey(config.Security.DBEncryption)

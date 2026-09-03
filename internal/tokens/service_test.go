@@ -15,6 +15,7 @@ import (
 
 	"github.com/gofrs/uuid"
 	"github.com/golang-jwt/jwt/v5"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"github.com/supabase/auth/internal/conf"
@@ -150,6 +151,104 @@ func (ts *RefreshTokenV2Suite) TestNormalUse() {
 
 		refreshTokenToUse = nrt.RefreshToken
 	}
+}
+
+func (ts *RefreshTokenV2Suite) TestUpdatesLastSignInAt() {
+	config := ts.config()
+	require.Equal(ts.T(), 2, config.Security.RefreshTokenAlgorithmVersion)
+
+	require.Nil(ts.T(), ts.User.LastSignInAt)
+
+	clock := time.Now()
+
+	srv := NewService(config, &panicHookManager{})
+	srv.SetTimeFunc(func() time.Time {
+		return clock
+	})
+
+	req, err := http.NewRequest("POST", "https://example.com/", nil)
+	require.NoError(ts.T(), err)
+
+	req = req.WithContext(context.Background())
+	responseHeaders := make(http.Header)
+
+	_, err = srv.IssueRefreshToken(
+		req,
+		responseHeaders,
+		ts.Conn,
+		ts.User,
+		models.PasswordGrant,
+		models.GrantParams{},
+	)
+	require.NoError(ts.T(), err)
+
+	dbUser, err := models.FindUserByID(ts.Conn, ts.User.ID)
+	require.NoError(ts.T(), err)
+	require.NotNil(ts.T(), dbUser.LastSignInAt)
+	require.WithinDuration(ts.T(), clock, *dbUser.LastSignInAt, time.Second)
+}
+
+func (ts *RefreshTokenV2Suite) TestOAuthServerRefreshRecordsAdditiveLoginMetric() {
+	config := ts.config()
+
+	oauthClient := &models.OAuthServerClient{
+		ID:                      uuid.Must(uuid.NewV4()),
+		ClientSecretHash:        "test-hash",
+		RegistrationType:        "dynamic",
+		ClientType:              models.OAuthServerClientTypeConfidential,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		RedirectURIs:            "https://example.com/callback",
+		GrantTypes:              "authorization_code,refresh_token",
+	}
+	require.NoError(ts.T(), models.CreateOAuthServerClient(ts.Conn, oauthClient))
+	clientID := oauthClient.ID
+
+	srv := NewService(config, &panicHookManager{})
+
+	req, err := http.NewRequest("POST", "https://example.com/", nil)
+	require.NoError(ts.T(), err)
+	req = req.WithContext(context.Background())
+	responseHeaders := make(http.Header)
+
+	at, err := srv.IssueRefreshToken(
+		req,
+		responseHeaders,
+		ts.Conn,
+		ts.User,
+		models.OAuthProviderAuthorizationCode,
+		models.GrantParams{OAuthClientID: &clientID},
+	)
+	require.NoError(ts.T(), err)
+	require.NotNil(ts.T(), at)
+
+	hook := logrustest.NewGlobal()
+	defer hook.Reset()
+
+	responseHeaders = make(http.Header)
+	nrt, err := srv.RefreshTokenGrant(context.Background(), ts.Conn, req, responseHeaders, RefreshTokenGrantParams{
+		RefreshToken: at.RefreshToken,
+		ClientID:     &clientID,
+	})
+	require.NoError(ts.T(), err)
+	require.NotNil(ts.T(), nrt)
+
+	var sawGenericToken, sawOAuthServerRefresh bool
+	for _, entry := range hook.AllEntries() {
+		if entry.Data["action"] != "login" {
+			continue
+		}
+		switch entry.Data["login_method"] {
+		case "token":
+			sawGenericToken = true
+			require.NotContains(ts.T(), entry.Data, "client_id")
+		case "oauth_server":
+			sawOAuthServerRefresh = true
+			require.Equal(ts.T(), clientID.String(), entry.Data["client_id"])
+			require.Equal(ts.T(), "refresh_token", entry.Data["grant_type"])
+		}
+	}
+	require.True(ts.T(), sawGenericToken, "existing generic token refresh login event must still fire")
+	require.True(ts.T(), sawOAuthServerRefresh, "additive oauth_server login event must fire with client_id and grant_type=refresh_token")
 }
 
 func (ts *RefreshTokenV2Suite) TestMaliciousReuse() {

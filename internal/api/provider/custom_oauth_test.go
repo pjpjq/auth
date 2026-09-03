@@ -30,6 +30,7 @@ func TestNewCustomOAuthProvider(t *testing.T) {
 		map[string]interface{}{
 			"prompt": "consent",
 		},
+		nil,
 	)
 
 	assert.NotNil(t, provider)
@@ -64,6 +65,7 @@ func TestCustomOAuthProvider_AuthCodeURL(t *testing.T) {
 				"access_type":  "offline",
 				"custom_param": "custom_value",
 			},
+			nil,
 		)
 
 		authURL := provider.AuthCodeURL("test-state")
@@ -111,6 +113,7 @@ func TestCustomOAuthProvider_GetUserData(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	token := &oauth2.Token{
@@ -155,6 +158,7 @@ func TestCustomOAuthProvider_GetUserDataWithAttributeMapping(t *testing.T) {
 			"name":           "full_name", // Map full_name field to name
 		},
 		nil,
+		nil,
 	)
 
 	token := &oauth2.Token{
@@ -185,7 +189,7 @@ func TestApplyAttributeMapping(t *testing.T) {
 				Email:   "test@example.com",
 			},
 			mapping: map[string]interface{}{
-				"email_verified": true, // Literal boolean value
+				"email_verified": true,                // Literal boolean value
 				"iat":            float64(1234567890), // Literal number value
 			},
 			expected: Claims{
@@ -204,15 +208,15 @@ func TestApplyAttributeMapping(t *testing.T) {
 				AvatarURL: "https://example.com/avatar.jpg",
 			},
 			mapping: map[string]interface{}{
-				"name":    "full_name",    // Map full_name -> name
-				"picture": "avatar_url",   // Map avatar_url -> picture
+				"name":    "full_name",  // Map full_name -> name
+				"picture": "avatar_url", // Map avatar_url -> picture
 			},
 			expected: Claims{
-				Subject:  "user-123",
-				Email:    "test@example.com",
-				Name:     "John Doe",
-				Picture:  "https://example.com/avatar.jpg",
-				FullName: "John Doe",  // Original field still exists
+				Subject:   "user-123",
+				Email:     "test@example.com",
+				Name:      "John Doe",
+				Picture:   "https://example.com/avatar.jpg",
+				FullName:  "John Doe", // Original field still exists
 				AvatarURL: "https://example.com/avatar.jpg",
 			},
 		},
@@ -249,7 +253,8 @@ func TestNewCustomOIDCProvider(t *testing.T) {
 	// Mock OIDC provider server
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/.well-known/openid-configuration" {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"issuer":                 server.URL,
@@ -258,7 +263,7 @@ func TestNewCustomOIDCProvider(t *testing.T) {
 				"userinfo_endpoint":      server.URL + "/userinfo",
 				"jwks_uri":               server.URL + "/jwks",
 			})
-		} else if r.URL.Path == "/jwks" {
+		case "/jwks":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"keys": []interface{}{},
@@ -274,12 +279,13 @@ func TestNewCustomOIDCProvider(t *testing.T) {
 		"test-client-secret",
 		"https://myapp.com/callback",
 		[]string{"profile", "email"}, // Without openid
-		server.URL, // issuer
-		server.URL + "/.well-known/openid-configuration",
+		server.URL,                   // issuer
+		server.URL+"/.well-known/openid-configuration",
 		true, // PKCE enabled
 		[]string{"ios-client", "android-client"},
 		map[string]interface{}{"email": "user_email"},
 		map[string]interface{}{"prompt": "consent"},
+		nil,
 		newTestOIDCProviderCache(t, 0),
 	)
 
@@ -380,7 +386,8 @@ func TestCustomOIDCProvider_AuthCodeURL(t *testing.T) {
 	// Mock OIDC provider server
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/.well-known/openid-configuration" {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"issuer":                 server.URL,
@@ -388,7 +395,7 @@ func TestCustomOIDCProvider_AuthCodeURL(t *testing.T) {
 				"token_endpoint":         server.URL + "/token",
 				"jwks_uri":               server.URL + "/jwks",
 			})
-		} else if r.URL.Path == "/jwks" {
+		case "/jwks":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"keys": []interface{}{},
@@ -405,7 +412,7 @@ func TestCustomOIDCProvider_AuthCodeURL(t *testing.T) {
 		"https://myapp.com/callback",
 		[]string{"openid", "profile"},
 		server.URL, // issuer
-		server.URL + "/.well-known/openid-configuration",
+		server.URL+"/.well-known/openid-configuration",
 		false,
 		nil,
 		nil,
@@ -415,6 +422,7 @@ func TestCustomOIDCProvider_AuthCodeURL(t *testing.T) {
 			"ui_locales": "en",
 			"login_hint": "user@example.com",
 		},
+		nil,
 		newTestOIDCProviderCache(t, 0),
 	)
 
@@ -466,6 +474,7 @@ func TestNewCustomOIDCProvider_CustomDiscoveryURL(t *testing.T) {
 		server.URL+"/custom-discovery",
 		false,
 		nil, nil, nil,
+		nil,
 		newTestOIDCProviderCache(t, time.Hour),
 	)
 	require.NoError(t, err)
@@ -480,7 +489,8 @@ func TestCustomOIDCProvider_RequiresPKCE(t *testing.T) {
 	// Mock OIDC provider server
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/.well-known/openid-configuration" {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"issuer":                 server.URL,
@@ -488,7 +498,7 @@ func TestCustomOIDCProvider_RequiresPKCE(t *testing.T) {
 				"token_endpoint":         server.URL + "/token",
 				"jwks_uri":               server.URL + "/jwks",
 			})
-		} else if r.URL.Path == "/jwks" {
+		case "/jwks":
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"keys": []interface{}{},
@@ -506,8 +516,9 @@ func TestCustomOIDCProvider_RequiresPKCE(t *testing.T) {
 			"https://myapp.com/callback",
 			[]string{"openid"},
 			server.URL, // issuer
-			server.URL + "/.well-known/openid-configuration",
+			server.URL+"/.well-known/openid-configuration",
 			true, // PKCE enabled
+			nil,
 			nil,
 			nil,
 			nil,
@@ -527,8 +538,9 @@ func TestCustomOIDCProvider_RequiresPKCE(t *testing.T) {
 			"https://myapp.com/callback",
 			[]string{"openid"},
 			server.URL, // issuer
-			server.URL + "/.well-known/openid-configuration",
+			server.URL+"/.well-known/openid-configuration",
 			false, // PKCE disabled
+			nil,
 			nil,
 			nil,
 			nil,
